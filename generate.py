@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
-import edge_tts
-
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 DEFAULT_RETRIES = 3
@@ -19,8 +19,44 @@ ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "out"
 
 
+def _health_dict() -> dict:
+    deps, checks, reasons = [], [], []
+    try:
+        import edge_tts as _et
+        ver = getattr(_et, "__version__", "unknown")
+        deps.append({"name": "edge-tts", "kind": "python", "ok": True,
+                     "found": ver, "required": ">=6.1.9"})
+    except ImportError as e:
+        deps.append({"name": "edge-tts", "kind": "python", "ok": False, "error": str(e)})
+        reasons.append("edge-tts not installed (critical)")
+
+    crit = [d for d in deps if not d["ok"]]
+    healthy = not crit and not [c for c in checks if not c["ok"]]
+    severity = "ok" if healthy else ("broken" if crit else "degraded")
+    return {
+        "name": "audio-gen", "version": __version__,
+        "healthy": healthy,
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "deps": deps, "env": [], "checks": checks, "reasons": reasons,
+        "extra": {
+            "runtime": f"python{sys.version_info.major}.{sys.version_info.minor}",
+            "venv": str(Path(sys.executable).parent.parent),
+            "severity": severity,
+        },
+    }
+
+
+def _emit_health_or_version() -> None:
+    """Pre-arg-parse: --version --json -> health JSON + exit; --version alone -> argparse handles."""
+    if "--version" in sys.argv and "--json" in sys.argv:
+        h = _health_dict()
+        print(json.dumps(h, indent=2, ensure_ascii=False))
+        sys.exit(0 if h["healthy"] else (1 if h["extra"]["severity"] == "degraded" else 2))
+
+
 async def synth(text: str, voice: str, rate: str, volume: str,
                 out: Path, timeout: float, retries: int) -> None:
+    import edge_tts  # imported here so --version --json works without edge_tts installed
     out.parent.mkdir(parents=True, exist_ok=True)
     last_err: Exception | None = None
     for attempt in range(1, retries + 1):
@@ -41,6 +77,7 @@ async def synth(text: str, voice: str, rate: str, volume: str,
 
 
 async def list_zh_voices() -> None:
+    import edge_tts
     voices = await edge_tts.list_voices()
     for v in sorted(voices, key=lambda x: x["ShortName"]):
         if v["Locale"].startswith("zh-"):
@@ -60,6 +97,7 @@ def resolve_text(args: argparse.Namespace) -> str:
 
 
 def main() -> int:
+    _emit_health_or_version()
     p = argparse.ArgumentParser(
         prog="generate.py",
         description="TTS via edge-tts. Text -> mp3.",
@@ -78,7 +116,9 @@ def main() -> int:
     p.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
                    help=f"单次合成超时秒数(默认 {DEFAULT_TIMEOUT})")
     p.add_argument("--list-voices", action="store_true", help="列出全部中文声音并退出")
-    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}",
+                   help="打印版本(配 --json 输出健康自检 JSON)")
+    p.add_argument("--json", action="store_true", help="与 --version 联用,输出健康自检 JSON")
     args = p.parse_args()
 
     if args.list_voices:
