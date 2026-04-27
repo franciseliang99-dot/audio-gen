@@ -10,7 +10,7 @@ from pathlib import Path
 
 import edge_tts
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 DEFAULT_RETRIES = 3
@@ -19,19 +19,14 @@ ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "out"
 
 
-async def _synth_once(text: str, voice: str, rate: str, volume: str,
-                      out: Path, timeout: float) -> None:
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tts = edge_tts.Communicate(text=text, voice=voice, rate=rate, volume=volume)
-    await asyncio.wait_for(tts.save(str(out)), timeout=timeout)
-
-
 async def synth(text: str, voice: str, rate: str, volume: str,
                 out: Path, timeout: float, retries: int) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
     last_err: Exception | None = None
     for attempt in range(1, retries + 1):
         try:
-            await _synth_once(text, voice, rate, volume, out, timeout)
+            tts = edge_tts.Communicate(text=text, voice=voice, rate=rate, volume=volume)
+            await asyncio.wait_for(tts.save(str(out)), timeout=timeout)
             if out.exists() and out.stat().st_size > 0:
                 return
             raise RuntimeError("empty audio stream")
@@ -104,11 +99,7 @@ def main() -> int:
         print(f"ERROR: 合成失败 — {e}", file=sys.stderr)
         return 2
 
-    size = out.stat().st_size if out.exists() else 0
-    if size == 0:
-        print(f"ERROR: 0 bytes 输出 — {out}", file=sys.stderr)
-        return 3
-
+    size = out.stat().st_size
     print(f"[v{__version__}] saved {out}  ({size} bytes, voice={args.voice}, len={len(text)})")
     return 0
 
